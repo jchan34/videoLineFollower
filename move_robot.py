@@ -1,63 +1,51 @@
 #! /usr/bin/env python
 import rospy
 from geometry_msgs.msg import Twist
-from cv_bridge import CvBridge
 from sensor_msgs.msg import CameraInfo, Image
-import cv2
-import numpy as np
+import cv2, cv_bridge
+import numpy
 
-rospy.init_node('topic_publisher')
-pub = rospy.Publisher('/cmd_vel', Twist, queue_size =1)
-bridge = CvBridge()
-move = Twist()
-prev_xval = 0
-#sub_cam_image = rospy.Subscriber('/camera1/image_raw',Image)
-sub_cam_info = rospy.Subscriber('/camera1/camera_info',CameraInfo)
+class Follower:
 
+	def __init__(self):
 
-
-def find_center_of_line_pixel(cv_image):
+		self.bridge = cv_bridge.CvBridge()
 	
-    _, img_bin = cv2.threshold(cv_image, 100,255, cv2.THRES_BINARY)
+		self.image_sub = rospy.Subscriber('/camera1/image_raw', 
+			Image, self.image_callback)
+		self.cmd_vel_pub = rospy.Publisher('/cmd_vel',Twist, queue_size = 1)
+		self.move = Twist()
 
-    small_chunk = img_bin[700:800][:]
-    averaged_array = [float(sum(l))/len(l) for l in zip(*small_chunk)]
-    min_value = min(averaged_array)
-    indices = [i for i, x in enumerate(averaged_array) if x == min_value]
-    mid_index = int(len(indices) / 2) - 1	
-    xval = int(indices[mid_index])
-    centre_coordinates = (xval,750)      
+	def image_callback(self,msg):
 
-    prev_xval = xval	
-    # Case for if no line in camera feed
-    if min_value == 1 and prev_xval < 400:
-	xval = 0
-    elif min_value == 1 and prev_xval >= 400:
-	xval = 800
-	
-    return xval
+		cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding = 'bgr8')
+		_, img_bin = cv2.threshold(cv_image, 100,255, cv2.THRESH_BINARY)
+		small_chunk = img_bin[700:800][:]
+		a = numpy.array([11,1,1])
+		av = numpy.average(small_chunk, axis = 0)
+		min_value = numpy.amin(av)
 
-def calculate_error(xval):
-    targetX = 400
-    error = targetX - xval
-	
-    p = 0.4
-    i = 0
-    d = 0
-    gain = p*error
-    
-    return gain
+		if min_value == 255:
+			xval = prev_xval 
+		else:
+			result = numpy.where(av == min_value)
+			centre_min_index = numpy.average(result[0],0)
 
-
-while not rospy.is_shutdown():
-
-    sub_cam_image = rospy.Subscriber('/camera1/image_raw',Image)
-    cv_image = bridge.imgmsg_to_cv2(sub_cam_image, desired_encoding = 'CV_8UC1')
-    x = find_line(cv_image)
-    gain = calculate_error(x)
-    move.linear.x = 0.5
-    move.angular.z = gain
-    pub.publish(move)
-	
+			prev_xval = centre_min_index
+			xval = centre_min_index
+			
+		p = 0.015
+		d = 0.02
+		err = 400 - xval
+		errd = xval - prev_xval
+		gain = p*err + d*errd
+		self.move.linear.x = 0.6
+		self.move.angular.z = gain
+		self.cmd_vel_pub.publish(self.move)
 
 
+rospy.init_node("follower")
+prev_xval = 400
+follower = Follower()
+
+rospy.spin()
